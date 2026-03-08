@@ -27,9 +27,11 @@ It's designed for developers who want full control over their AI traffic without
 ### Prerequisites
 
 - Python 3.9+
-- `uv` package manager
+- `uv` package manager (install with `curl -LsSf https://astral.sh/uv/install.sh | sh`)
 
 ### Installation
+
+Clone the repository and run the bootstrap command:
 
 ```bash
 git clone <this-repo>
@@ -37,25 +39,33 @@ cd promptproxy
 make bootstrap
 ```
 
-This command installs Python dependencies and downloads the spaCy NLP model required for semantic filtering (enabled by default).
+This installs all Python dependencies (including dev tools) and downloads the spaCy NLP model required for semantic filtering.
 
 ### Run the Proxy
+
+Start the server:
 
 ```bash
 make run
 ```
 
-The proxy starts on `http://127.0.0.1:8000` by default.
+The proxy will start on `http://127.0.0.1:8000` by default. It uses the stub backend in demo mode by default.
 
 ### Test with CLI
 
-In another terminal:
+In another terminal, run the CLI client:
 
 ```bash
 make cli
 ```
 
-Type messages and see them processed through the stub backend in demo mode.
+Type messages to interact with the proxy. Use `/quit` to exit.
+
+### Semantic Filtering
+
+PromptProxy includes semantic filtering using spaCy and Presidio for PII detection. The NLP model `en_core_web_sm` is downloaded during `make bootstrap`. If you encounter issues, run `make nlp` manually.
+
+In demo mode (default), the proxy fails open if the model is missing, disabling semantic filtering with a warning.
 
 ## Architecture Overview
 
@@ -137,16 +147,19 @@ The CLI is designed for live demos, with two distinct streams:
 
 A new `ui.demo_mode` setting toggles demo‑friendly behavior (minimal noise on stdout).
 
-## CLI Usage
+## Development
+
+Use the Makefile for common tasks:
 
 ```bash
-make cli
+make help       # Show available commands
+make bootstrap  # Full setup (deps + NLP model)
+make run        # Start the proxy server
+make cli        # Run the CLI client
+make test       # Run tests
+make format     # Format code with black
+make lint       # Lint code with flake8
 ```
-
-Commands:
-- Type messages to chat
-- `/quit` to exit
-- Ctrl+C to interrupt
 
 ## Backend Switching
 

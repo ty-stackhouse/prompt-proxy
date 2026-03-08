@@ -48,6 +48,11 @@ logs/
 ehthumbs.db
 Thumbs.db
 
+# Junk files
+nul
+*.tmp
+*.swp
+
 # IDE
 .vscode/
 .idea/
