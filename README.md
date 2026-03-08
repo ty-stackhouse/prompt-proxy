@@ -22,14 +22,16 @@ It's designed for developers who want full control over their AI traffic without
 - **Compatible**: OpenAI API compatible, works with existing clients
 - **Secure**: Pydantic-validated config, no shell execution, explicit trust boundaries
 
-## Quick Start
+## Development Environment
+
+PromptProxy uses **uv** with a **project-local `.venv`** for all development tasks. This is the only supported workflow.
 
 ### Prerequisites
 
 - Python 3.9+
 - `uv` package manager (install with `curl -LsSf https://astral.sh/uv/install.sh | sh`)
 
-### Installation
+### Setup
 
 Clone the repository and run the bootstrap command:
 
@@ -39,33 +41,69 @@ cd promptproxy
 make bootstrap
 ```
 
-This installs all Python dependencies (including dev tools) and downloads the spaCy NLP model required for semantic filtering.
+This creates the project-local `.venv`, installs all Python dependencies (including dev tools), and downloads the spaCy NLP model required for semantic filtering.
 
-### Run the Proxy
+### Running Commands
 
-Start the server:
+**Use `make` targets or `uv run`:**
 
 ```bash
+make run        # Start the proxy server
+make cli        # Run the CLI chat client
+make test       # Run tests
+make format     # Format code
+make lint       # Lint code
+```
+
+**Or use `uv run` directly:**
+
+```bash
+uv run python proxy.py    # Start the server
+uv run promptproxy        # Run the CLI
+uv run pytest             # Run tests
+```
+
+### No Manual Activation Needed
+
+Do **not** activate a virtualenv manually. The project uses `uv` to manage the environment automatically:
+
+```bash
+# Don't do this:
+# source .venv/bin/activate
+
+# Do this instead:
+uv run promptproxy
 make run
 ```
 
-The proxy will start on `http://127.0.0.1:8000` by default. It uses the stub backend in demo mode by default.
+If you have an external virtualenv active, PromptProxy will detect it and warn you. Deactivate it and use `uv run` or `make` targets instead.
 
-### Test with CLI
+### Troubleshooting Environment Issues
 
-In another terminal, run the CLI client:
-
+**Broken `.venv`:**
 ```bash
-make cli
+rm -rf .venv
+make bootstrap
 ```
 
-Type messages to interact with the proxy. Use `/quit` to exit.
+**Not running in correct environment:**
+```bash
+# Check your environment
+make env-check
 
-### Semantic Filtering
+# If you see a warning, deactivate any active virtualenv:
+deactivate
 
-PromptProxy includes semantic filtering using spaCy and Presidio for PII detection. The NLP model `en_core_web_sm` is downloaded during `make bootstrap`. If you encounter issues, run `make nlp` manually.
+# Then use uv run or make targets
+uv run promptproxy
+```
 
-In demo mode (default), the proxy fails open if the model is missing, disabling semantic filtering with a warning.
+**NLP model issues:**
+```bash
+make nlp
+```
+
+This will re-sync dependencies and download the spaCy model.
 
 ## Architecture Overview
 
@@ -116,6 +154,57 @@ When `ui.demo_mode` is enabled in config.yaml, PromptProxy provides human-friend
 - Compact per-request summary to stdout: `✓ [abc123] filters: regex | tokens: 5 → 12 | latency: 150ms`
 - Structured JSON logs to stderr (for debugging/audit)
 - Clean separation between user-facing output and machine logs
+
+## Terminal Output
+
+PromptProxy has a deliberate three-channel output design:
+
+### Stdout (Human Interface)
+
+Stdout is for intentional, curated product display only:
+
+- **Request display**: When `ui.stdout_display_requests` is enabled, shows input/output request text
+- **Format**: Clean human-readable text showing what the request looked like before and after filtering
+- **Example**:
+  ```
+  [abcd1234] PASS
+  input request:  Hello, how are you?
+  output request: Hello, how are you?
+  ```
+  Or for modified requests:
+  ```
+  [abcd1234] MODIFY (regex_filter, denylist_filter)
+  input request:  My SSN is 123-45-6789
+  output request: My SSN is [REDACTED]
+  ```
+
+**Security Note**: Request body display is disabled by default (`ui.stdout_display_requests: false`). Enable it only in development when you want to see request content. Never enable in production where logs might be exposed.
+
+### Stderr (Diagnostics)
+
+Stderr is for warnings and errors only:
+
+- **Format**: Plain text, not JSON: `2026-03-08 16:23:53 WARNING message`
+- **Content**: Filter initialization warnings, configuration errors, request rejections
+- **Policy**: No INFO-level logs in normal operation - terminal stays clean
+
+### Log File (Machine History)
+
+When `logging.file_path` is configured, detailed structured logs go to the file:
+
+- **Format**: JSON for machine parsing
+- **Content**: Full request traces, filter decisions, backend responses, diagnostics
+- **Use case**: Debugging, compliance, audit trails
+
+### Startup Output
+
+The server produces minimal startup output:
+
+```
+PromptProxy running on http://127.0.0.1:8000
+```
+
+No multi-line banners, no Uvicorn access logs, no framework chatter. Warnings during startup still appear on stderr in plain text.
 
 ## API Reference
 

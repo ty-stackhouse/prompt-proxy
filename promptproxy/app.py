@@ -30,7 +30,8 @@ from .models import (
 )
 from .pipeline import Pipeline, filterable_to_messages
 from .backends import get_backend
-from .logging_config import configure_logging, log_demo_summary
+from .logging_config import configure_logging
+from .console import print_request
 from .errors import (
     policy_rejection_error,
     invalid_request_error,
@@ -95,9 +96,9 @@ def init_app(cfg: Config = None):
     # Initialize backend
     backend = get_backend(config)
     
-    logger.info(
-        f"PromptProxy initialized on {config.server.host}:{config.server.port}",
-        extra={}
+    # Log startup at WARNING level so it appears on stderr (not INFO)
+    logger.warning(
+        f"PromptProxy initialized on {config.server.host}:{config.server.port}"
     )
 
 
@@ -359,20 +360,14 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
     # Calculate latency
     latency_ms = (time.time() - start_time) * 1000
     
-    logger.info(
-        f"[{correlation_id}] Request completed in {latency_ms:.0f}ms",
-        extra={"correlation_id": correlation_id}
+    # Render console output if enabled (stdout for human display)
+    # This shows input/output request text
+    print_request(
+        correlation_id=correlation_id,
+        original_messages=request.messages,
+        filter_result=result,
+        max_length=config.ui.stdout_max_display_length,
+        enabled=config.ui.stdout_display_requests
     )
-    
-    # Emit demo output if in demo mode
-    if config.ui.demo_mode:
-        log_demo_summary(
-            correlation_id=correlation_id,
-            action=action,
-            filters=filters_applied,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            latency_ms=latency_ms
-        )
     
     return response

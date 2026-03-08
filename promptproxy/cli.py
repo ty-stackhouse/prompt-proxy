@@ -14,6 +14,7 @@ from rich.text import Text
 
 from promptproxy.config import load_config
 from promptproxy.logging_config import configure_logging
+from promptproxy.env import check_environment
 
 # chat console writes to stdout
 chat_console = Console()
@@ -23,6 +24,9 @@ log_console = Console(stderr=True)
 logger = logging.getLogger(__name__)
 
 def main():
+    # Check environment before proceeding
+    check_environment()
+    
     config = load_config()
     # configure logging according to config; output goes to stderr/file
     configure_logging(level=config.logging.level, file_path=config.logging.file_path)

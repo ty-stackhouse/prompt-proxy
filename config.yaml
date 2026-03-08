@@ -20,6 +20,9 @@ logging:
 
 ui:
   demo_mode: false  # when true, CLI minimizes non-chat output
+  # Request display on stdout (security-sensitive - disabled by default)
+  stdout_display_requests: false  # set true to see input/output request text
+  stdout_max_display_length: 500  # truncate requests longer than this
 
 request_filters:
   - name: "semantic_filter"

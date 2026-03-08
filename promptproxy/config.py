@@ -23,8 +23,16 @@ class LoggingConfig(BaseModel):
 
 
 class UIConfig(BaseModel):
-    """Settings controlling CLI/demo behavior."""
+    """Settings controlling CLI/demo behavior.
+    
+    Attributes:
+        demo_mode: When true, CLI minimizes non-chat output (legacy, prefer stdout_display_requests)
+        stdout_display_requests: When true, show input/output request text on stdout
+        stdout_max_display_length: Maximum characters to display for request text on stdout
+    """
     demo_mode: bool = False
+    stdout_display_requests: bool = False  # Security: disabled by default
+    stdout_max_display_length: int = 500   # Truncate long requests
 
 class FilterRule(BaseModel):
     name: str
