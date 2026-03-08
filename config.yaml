@@ -21,7 +21,7 @@ logging:
 ui:
   demo_mode: false  # when true, CLI minimizes non-chat output
 
-filters:
+request_filters:
   - name: "semantic_filter"
     enabled: true
     entities: ["PERSON", "EMAIL_ADDRESS", "LOCATION"]
@@ -44,4 +44,8 @@ filters:
         action: "replace"
         replacement: "[FILTERED]"
   - name: "intercept_filter"
+    enabled: false
+
+response_filters:
+  - name: "noop_filter"
     enabled: false

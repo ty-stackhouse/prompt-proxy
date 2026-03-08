@@ -3,7 +3,7 @@
 import yaml
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, root_validator
 
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
@@ -38,6 +38,11 @@ class Config(BaseModel):
     fail_open: bool = True
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+
+    # ---- new staged filters ----
+    request_filters: List[FilterRule] = Field(default_factory=list)
+    response_filters: List[FilterRule] = Field(default_factory=list)
+    # legacy field for backwards compatibility; migrated to request_filters
     filters: List[FilterRule] = Field(default_factory=list)
 
     @validator('backend')
@@ -45,6 +50,18 @@ class Config(BaseModel):
         if v.type not in ["stub", "litellm"]:
             raise ValueError(f"Unsupported backend type: {v.type}")
         return v
+
+    @classmethod
+    def __get_validators__(cls):
+        # preserve default pydantic behaviour
+        yield from super().__get_validators__()
+
+    @root_validator(pre=True)
+    def migrate_old_filters(cls, values):
+        # Support old 'filters' key by copying its value into request_filters
+        if 'filters' in values and 'request_filters' not in values:
+            values['request_filters'] = values.pop('filters')
+        return values
 
 def load_config(config_path: str = "config.yaml") -> Config:
     path = Path(config_path)

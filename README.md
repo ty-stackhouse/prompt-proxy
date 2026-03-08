@@ -84,10 +84,132 @@ In demo mode (default), the proxy fails open if the model is missing, disabling 
 
 ### Core Components
 
-1. **Proxy Server**: FastAPI app exposing `/v1/chat/completions`
+1. **Proxy Server**: FastAPI app exposing OpenAI-compatible endpoints
 2. **Backend Abstraction**: Pluggable backends (Stub, LiteLLM)
-3. **Filter Pipeline**: Configurable transformation filters
+3. **Filter Pipeline**: Configurable transformation filters (now split into request/response stages)
 4. **CLI Client**: Terminal-based testing interface
+
+## API Reference
+
+PromptProxy exposes an OpenAI-compatible API surface. Point any OpenAI-compatible client at PromptProxy to use it as a local interception layer.
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Health check |
+| `GET` | `/v1/models` | List available models |
+| `POST` | `/v1/chat/completions` | Chat completion (subset of OpenAI API) |
+
+### POST /v1/chat/completions
+
+Create a chat completion. Accepts an OpenAI-compatible request body.
+
+**Request:**
+
+```json
+{
+  "model": "gpt-3.5-turbo",
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "Hello!"}
+  ],
+  "temperature": 1.0,
+  "max_tokens": 1000,
+  "top_p": 1.0,
+  "n": 1,
+  "stream": false,
+  "presence_penalty": 0.0,
+  "frequency_penalty": 0.0,
+  "user": "user-123"
+}
+```
+
+**Supported fields:**
+- `model` (required): Model identifier
+- `messages` (required): List of message objects with `role` and `content`
+- `temperature`: Sampling temperature (0-2), default 1.0
+- `max_tokens`: Maximum tokens to generate, default 1000
+- `top_p`: Nucleus sampling, default 1.0
+- `n`: Number of completions, default 1
+- `stop`: Stop sequences
+- `presence_penalty`: Presence penalty, default 0.0
+- `frequency_penalty`: Frequency penalty, default 0.0
+- `user`: User identifier
+
+**Unsupported fields** (ignored): `stream`, `functions`, `function_call`, `logit_bias`
+
+**Response:**
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "created": 1699000000,
+  "model": "gpt-3.5-turbo",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Hello! How can I help you?"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 20,
+    "completion_tokens": 8,
+    "total_tokens": 28
+  }
+}
+```
+
+### Error Responses
+
+Errors are returned in OpenAI format:
+
+```json
+{
+  "error": {
+    "message": "Policy rejection: phrase not allowed",
+    "type": "invalid_request_error",
+    "code": "policy_rejection"
+  }
+}
+```
+
+**Error types:**
+- `invalid_request_error`: Malformed request or policy rejection
+- `server_error`: Internal server error
+- `service_unavailable_error`: Backend unavailable
+
+### Using with OpenAI Clients
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="dummy-key",  # Not used locally
+    base_url="http://127.0.0.1:8000/v1"
+)
+
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+```
+
+Or with `curl`:
+
+```bash
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
 
 ## Configuration
 
@@ -118,7 +240,7 @@ logging:
 ui:
   demo_mode: false  # when true, CLI only emits chat transcript on stdout
 
-filters:
+request_filters:
   - name: "semantic_filter"
     enabled: true
     entities: ["PERSON", "EMAIL_ADDRESS", "LOCATION"]
@@ -136,7 +258,14 @@ filters:
         message: "This content is not allowed."
   - name: "intercept_filter"
     enabled: false  # Future interactive editing
+
+response_filters:
+  - name: "noop_filter"
+    enabled: false  # placeholder for future response-stage plugins
 ```
+
+(Existing configs that still use `filters:` will continue working; they are
+automatically treated as `request_filters`.)
 
 ## Output channels & demo mode
 
@@ -146,6 +275,21 @@ The CLI is designed for live demos, with two distinct streams:
 - **stderr / file**: detailed operational logs, warnings, trace data. Logging is JSON‑formatted and written to stderr by default; you can also configure a file path. Logs should never pollute the demo output.
 
 A new `ui.demo_mode` setting toggles demo‑friendly behavior (minimal noise on stdout).
+
+### Filter stages
+
+The filter system is now divided into two ordered stages:
+
+- **request_filters** run *before* the backend call.  They can modify or reject
+  the prompt text and are stacked in the order defined in configuration.
+- **response_filters** run *after* the backend returns.  This stage is currently
+  scaffolded with a no‑op default, but will eventually allow transformations
+  of model output.
+
+Both sections accept the same plugin names; existing filters are request‑stage
+by default.  A migration helper ensures old `filters` entries are treated as
+`request_filters`, so existing configs continue to work.
+
 
 ## Development
 
