@@ -10,10 +10,12 @@ from .config import Config
 from .models import ChatCompletionRequest, ChatCompletionResponse, Message
 from .pipeline import Pipeline
 from .backends import get_backend
-from .logging_config import get_logger
+from .logging_config import configure_logging
+import logging
 from .filters import register_filters
 
-logger = get_logger(__name__)
+# logger instance (handlers attached when logging is configured)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="PromptProxy", version="0.1.0")
 
@@ -24,6 +26,8 @@ backend = None
 def init_app(cfg: Config):
     global config, pipeline, backend
     config = cfg
+    # configure logging before anything else so that early messages obey settings
+    configure_logging(level=config.logging.level, file_path=config.logging.file_path)
     register_filters()
     pipeline = Pipeline(config)
     backend = get_backend(config)

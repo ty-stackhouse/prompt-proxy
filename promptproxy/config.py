@@ -18,6 +18,13 @@ class BackendConfig(BaseModel):
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     log_raw_prompt: bool = False
+    # Optional path to write structured logs (JSON). Logs will still go to stderr.
+    file_path: Optional[str] = None
+
+
+class UIConfig(BaseModel):
+    """Settings controlling CLI/demo behavior."""
+    demo_mode: bool = False
 
 class FilterRule(BaseModel):
     name: str
@@ -30,6 +37,7 @@ class Config(BaseModel):
     backend: BackendConfig = Field(default_factory=BackendConfig)
     fail_open: bool = True
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    ui: UIConfig = Field(default_factory=UIConfig)
     filters: List[FilterRule] = Field(default_factory=list)
 
     @validator('backend')

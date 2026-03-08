@@ -4,8 +4,9 @@ help: ## Show this help message
 	@echo "Available commands:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-15s %s\n", $$1, $$2}'
 
-bootstrap: ## Full local setup for PromptProxy (Python deps)
+bootstrap: ## Full local setup for PromptProxy (Python deps + NLP model)
 	uv sync
+	$(MAKE) nlp
 
 sync: ## Sync Python dependencies (alias for bootstrap)
 	uv sync
@@ -14,7 +15,7 @@ run: ## Run the proxy server
 	uv run python proxy.py
 
 cli: ## Run the CLI chat client
-	uv run python cli.py
+	uv run promptproxy
 
 test: ## Run tests
 	uv run pytest

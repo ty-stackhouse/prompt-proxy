@@ -37,15 +37,7 @@ cd promptproxy
 make bootstrap
 ```
 
-### Optional: Enable Semantic Filtering
-
-If you want to use the semantic filter for PII redaction:
-
-```bash
-make nlp
-```
-
-This downloads the required spaCy NLP model.
+This command installs Python dependencies and downloads the spaCy NLP model required for semantic filtering (enabled by default).
 
 ### Run the Proxy
 
@@ -63,7 +55,7 @@ In another terminal:
 make cli
 ```
 
-Type messages and see them processed through the stub backend.
+Type messages and see them processed through the stub backend in demo mode.
 
 ## Architecture Overview
 
@@ -109,6 +101,12 @@ fail_open: true  # Default: allow requests through on filter errors
 logging:
   level: "INFO"
   log_raw_prompt: false  # Don't log original prompts by default
+  # Optional file path to persist structured logs in JSON format.
+  # Empty string means no file logging; logs still go to stderr.
+  file_path: ""
+
+ui:
+  demo_mode: false  # when true, CLI only emits chat transcript on stdout
 
 filters:
   - name: "semantic_filter"
@@ -129,6 +127,15 @@ filters:
   - name: "intercept_filter"
     enabled: false  # Future interactive editing
 ```
+
+## Output channels & demo mode
+
+The CLI is designed for live demos, with two distinct streams:
+
+- **stdout**: clean chat transcript and user interaction (what you would show on stage).
+- **stderr / file**: detailed operational logs, warnings, trace data. Logging is JSON‑formatted and written to stderr by default; you can also configure a file path. Logs should never pollute the demo output.
+
+A new `ui.demo_mode` setting toggles demo‑friendly behavior (minimal noise on stdout).
 
 ## CLI Usage
 

@@ -15,6 +15,11 @@ fail_open: true
 logging:
   level: "INFO"
   log_raw_prompt: false
+  # Optional file for structured logs (JSON). Stdout remains clean for chat transcript.
+  file_path: ""  # e.g. "/var/log/promptproxy.log"
+
+ui:
+  demo_mode: false  # when true, CLI minimizes non-chat output
 
 filters:
   - name: "semantic_filter"

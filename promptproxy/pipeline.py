@@ -5,10 +5,10 @@ from dataclasses import dataclass
 
 from .config import Config
 from .registry import get_filter
-from .logging_config import get_logger
+import logging
 from .types import FilterContext, FilterResult
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 class Pipeline:
     def __init__(self, config: Config):
