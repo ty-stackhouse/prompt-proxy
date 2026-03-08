@@ -201,7 +201,8 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
     correlation_id = str(uuid.uuid4())
     start_time = time.time()
     
-    logger.info(
+    # Log request start at debug level (not info) to keep terminal clean
+    logger.debug(
         f"[{correlation_id}] Request started",
         extra={"correlation_id": correlation_id}
     )
@@ -219,8 +220,8 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
             code="empty_messages"
         )
 
-    # Log original message count
-    logger.info(
+    # Log message count at debug level
+    logger.debug(
         f"[{correlation_id}] Received {len(request.messages)} messages "
         f"({len([m for m in request.messages if m.role == 'user'])} user, "
         f"{len([m for m in request.messages if m.role == 'system'])} system, "
@@ -247,8 +248,9 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
         # Rebuild message list from filtered content
         filtered_messages = filterable_to_messages(result.messages)
         
-        logger.info(
-            f"[{correlation_id}] Request filtering complete: "
+        # Log filtering result at debug level
+        logger.debug(
+            f"[{correlation_id}] Filtering complete: "
             f"{'modified' if result.changed else 'unchanged'}, "
             f"filters: {filters_applied}",
             extra={"correlation_id": correlation_id}
@@ -278,7 +280,7 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
             )
             return server_error(message="Internal processing error")
 
-    # Forward to backend with full message history
+        # Forward to backend with full message history
     try:
         backend_response = await backend.generate(
             messages=filtered_messages,
@@ -291,7 +293,8 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
                 "stop": request.stop,
             }
         )
-        logger.info(
+        # Log backend response at debug level
+        logger.debug(
             f"[{correlation_id}] Backend response received",
             extra={"correlation_id": correlation_id}
         )
@@ -306,8 +309,9 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
     raw_content = backend_response.get("content", "")
     resp_result = await pipeline.process_response(raw_content, correlation_id)
     
+    # Log response filter changes at debug level
     if resp_result.changed:
-        logger.info(
+        logger.debug(
             f"[{correlation_id}] Response text modified by filters",
             extra={"correlation_id": correlation_id}
         )

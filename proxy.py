@@ -30,20 +30,20 @@ def main():
         print(f"Either stop the conflicting process or change the port in config.yaml.", file=sys.stderr)
         sys.exit(1)
     
-    # Clean startup banner
+    # Clean startup banner - send to stderr to keep stdout clean for potential pipe usage
     backend_type = config.backend.type
     demo_mode = "enabled" if config.ui.demo_mode else "disabled"
-    print(f"PromptProxy starting (PID: {os.getpid()})")
-    print(f"  Host: {host}")
-    print(f"  Port: {port}")
-    print(f"  Backend: {backend_type}")
-    print(f"  Demo mode: {demo_mode}")
+    print(f"PromptProxy starting (PID: {os.getpid()})", file=sys.stderr)
+    print(f"  Host: {host}", file=sys.stderr)
+    print(f"  Port: {port}", file=sys.stderr)
+    print(f"  Backend: {backend_type}", file=sys.stderr)
+    print(f"  Demo mode: {demo_mode}", file=sys.stderr)
     
     uvicorn.run(
         app,
         host=host,
         port=port,
-        log_level=config.logging.level.lower(),
+        log_level="warning",  # Only show warnings and errors from uvicorn
     )
 
 if __name__ == "__main__":

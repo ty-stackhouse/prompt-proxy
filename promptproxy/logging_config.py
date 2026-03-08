@@ -1,4 +1,36 @@
-"""Logging configuration with dual-mode support."""
+"""Logging configuration with dual-mode support.
+
+Terminal Output Policy
+======================
+
+Stdout (Human Interface)
+------------------------
+Reserved for intentional, curated output only:
+- Demo mode: Compact, attractive per-request summaries (one line per request)
+- Normal mode: Silent (no stdout output unless explicitly requested)
+- NEVER: JSON logs, debug traces, request lifecycle noise, stack traces
+
+Stderr (Diagnostics)
+--------------------
+Operational messages and errors:
+- Server/framework diagnostics
+- Filter initialization status (warnings on failure)
+- Request errors and rejections
+- Configuration warnings
+- Any structured logs for terminal debugging
+
+Log File (Machine History)
+--------------------------
+Detailed persistent history:
+- Request traces with correlation IDs
+- Filter internals and decisions
+- Backend failures and retries
+- Startup diagnostics
+- Raw prompt logging (when explicitly enabled)
+
+This separation ensures stdout remains a clean UI surface while
+all operational data flows to stderr and/or log files.
+"""
 
 import logging
 import sys
@@ -168,9 +200,10 @@ def _configure_demo_mode(level: str, file_path: Optional[str]):
     for h in list(root.handlers):
         root.removeHandler(h)
     
-    root.setLevel(getattr(logging, level.upper(), logging.INFO))
+    # Set root to WARNING to minimize noise on stderr
+    root.setLevel(logging.WARNING)
     
-    # stderr: minimal logging (warnings and errors only)
+    # stderr: warnings and errors only (minimal noise)
     stderr_handler = logging.StreamHandler(sys.stderr)
     stderr_handler.setLevel(logging.WARNING)
     stderr_handler.setFormatter(
@@ -178,14 +211,20 @@ def _configure_demo_mode(level: str, file_path: Optional[str]):
     )
     root.addHandler(stderr_handler)
     
-    # stdout: demo output (controlled via custom mechanism)
+    # stdout: demo output only - clean curated interface
+    # Set the demo logger to DEBUG so demo output prints to stdout
+    demo_logger = logging.getLogger("promptproxy.demo")
+    demo_logger.setLevel(logging.DEBUG)
+    demo_logger.propagate = False  # Don't send to root
+    
+    # Direct stdout handler for demo output (no filter needed - dedicated logger)
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setLevel(logging.DEBUG)
-    stdout_handler.setFormatter(DemoFormatter(use_color=True))
-    stdout_handler.addFilter(_DemoFilter())
-    root.addHandler(stdout_handler)
+    # Use a simple formatter that just outputs the message
+    stdout_handler.setFormatter(logging.Formatter("%(message)s"))
+    demo_logger.addHandler(stdout_handler)
     
-    # Optional file handler
+    # Optional file handler for full logs
     if file_path:
         try:
             fh = logging.FileHandler(file_path)
@@ -249,19 +288,21 @@ def log_demo_summary(
 ):
     """Log a demo-friendly summary to stdout.
     
-    In demo mode, this prints a compact human-readable line.
-    In production mode, this logs structured info to stderr.
+    In demo mode, this prints a compact human-readable line to stdout.
+    Uses a dedicated logger to ensure clean separation from other logs.
     """
     logger = logging.getLogger("promptproxy.demo")
     
-    if logger.level <= logging.DEBUG:
-        # Demo mode: print to stdout
-        DemoFormatter(use_color=True).emit_demo_output(
-            correlation_id, action, filters, prompt_tokens, completion_tokens, latency_ms
-        )
-    else:
-        # Production mode: log structured info to stderr
-        logger.info(
-            f"Request {correlation_id}: action={action}, filters={filters}, "
-            f"tokens={prompt_tokens}+{completion_tokens}, latency={latency_ms}ms"
-        )
+    # Create the formatted output
+    output = DemoOutput(
+        correlation_id=correlation_id,
+        action=action,
+        filters=filters,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        latency_ms=latency_ms
+    )
+    
+    # Emit directly to stdout in demo mode (clean interface)
+    if logger.level <= logging.INFO:
+        print(output.format())
