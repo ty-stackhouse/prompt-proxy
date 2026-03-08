@@ -86,8 +86,36 @@ In demo mode (default), the proxy fails open if the model is missing, disabling 
 
 1. **Proxy Server**: FastAPI app exposing OpenAI-compatible endpoints
 2. **Backend Abstraction**: Pluggable backends (Stub, LiteLLM)
-3. **Filter Pipeline**: Configurable transformation filters (now split into request/response stages)
+3. **Filter Pipeline**: Configurable transformation filters (request/response stages)
 4. **CLI Client**: Terminal-based testing interface
+
+### Message Filtering Architecture
+
+PromptProxy preserves the full OpenAI message structure through the filtering pipeline. This is a key architectural decision that differentiates PromptProxy from simpler proxy implementations.
+
+**How it works:**
+
+1. Incoming messages are converted to `FilterableMessage` objects that wrap the content
+2. Filters can operate on individual messages via `apply_messages()` method
+3. By default, filters only modify `user` messages - `system` and `assistant` messages are preserved
+4. After filtering, messages are converted back to the original format for backend forwarding
+
+**Filter Policy:**
+
+- **User messages**: Fully filterable - content can be transformed, redacted, or rejected
+- **System messages**: Preserved unchanged - these provide critical context
+- **Assistant messages**: Preserved unchanged - maintains conversation history
+- **Tool/function messages**: Preserved unchanged - future compatibility
+
+This design ensures that conversation context is maintained while still allowing policy enforcement on user input.
+
+### Demo Mode
+
+When `ui.demo_mode` is enabled in config.yaml, PromptProxy provides human-friendly output:
+
+- Compact per-request summary to stdout: `✓ [abc123] filters: regex | tokens: 5 → 12 | latency: 150ms`
+- Structured JSON logs to stderr (for debugging/audit)
+- Clean separation between user-facing output and machine logs
 
 ## API Reference
 

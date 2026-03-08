@@ -9,6 +9,7 @@ Supported endpoints:
 """
 
 import uuid
+import time
 from typing import List, Dict, Any
 from datetime import datetime
 
@@ -16,7 +17,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from .config import Config
+from .config import Config, load_config
 from .models import (
     ChatCompletionRequest, 
     ChatCompletionResponse, 
@@ -27,9 +28,9 @@ from .models import (
     ChatCompletionChoice,
     ChatMessage
 )
-from .pipeline import Pipeline
+from .pipeline import Pipeline, filterable_to_messages
 from .backends import get_backend
-from .logging_config import configure_logging
+from .logging_config import configure_logging, log_demo_summary
 from .errors import (
     policy_rejection_error,
     invalid_request_error,
@@ -46,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="PromptProxy", 
-    version="0.1.0",
+    version="0.2.0",
     description="OpenAI-compatible local interception proxy for LLM traffic"
 )
 
@@ -55,14 +56,71 @@ pipeline: Pipeline = None
 backend = None
 
 
-def init_app(cfg: Config):
+def init_app(cfg: Config = None):
+    """Initialize the application with configuration.
+    
+    If no config is provided, loads from default config.yaml.
+    Handles port collision detection and missing NLP dependencies gracefully.
+    """
     global config, pipeline, backend
+    
+    # Load config if not provided
+    if cfg is None:
+        try:
+            cfg = load_config()
+        except FileNotFoundError:
+            # Use default config if no config file exists
+            cfg = Config()
+        except Exception as e:
+            raise RuntimeError(f"Failed to load config: {e}")
+    
     config = cfg
+    
+    # Check for port availability before starting
+    _check_port_available(config.server.host, config.server.port)
+    
     # configure logging before anything else so that early messages obey settings
-    configure_logging(level=config.logging.level, file_path=config.logging.file_path)
+    configure_logging(
+        level=config.logging.level, 
+        file_path=config.logging.file_path,
+        demo_mode=config.ui.demo_mode
+    )
+    
+    # Register available filters
     register_filters()
+    
+    # Initialize pipeline
     pipeline = Pipeline(config)
+    
+    # Initialize backend
     backend = get_backend(config)
+    
+    logger.info(
+        f"PromptProxy initialized on {config.server.host}:{config.server.port}",
+        extra={}
+    )
+
+
+def _check_port_available(host: str, port: int):
+    """Check if the port is available and raise friendly error if not."""
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind((host, port))
+        sock.close()
+    except OSError as e:
+        if e.errno == 98:  # Address already in use
+            raise RuntimeError(
+                f"Port {port} is already in use. "
+                f"Stop any running PromptProxy instances or change the port in config.yaml."
+            )
+        elif e.errno == 13:  # Permission denied
+            raise RuntimeError(
+                f"Permission denied to bind to port {port}. "
+                f"Try using a port above 1024 or run with appropriate permissions."
+            )
+        else:
+            raise RuntimeError(f"Failed to bind to port {port}: {e}")
 
 
 @app.get("/health")
@@ -110,6 +168,19 @@ async def list_models():
     ]
     return ModelList(data=models)
 
+
+def _count_tokens(text: str) -> int:
+    """Approximate token count (simple word-based estimate)."""
+    return len(text.split())
+
+
+def _extract_filter_metadata(result) -> tuple:
+    """Extract filter names and action from pipeline result."""
+    filters = result.metadata.get("filters_applied", [])
+    action = result.action
+    return filters, action
+
+
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def chat_completions(request: ChatCompletionRequest, req: Request):
     """Handle chat completion requests.
@@ -118,57 +189,99 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
     and returns responses in OpenAI format.
     
     Request filtering:
-    - Runs request filters on the user prompt
+    - Runs request filters on user messages while preserving message structure
+    - System and assistant messages are preserved unchanged
     - Rejects with policy_rejection error if filter rejects
     
     Response handling:
-    - Forwards to backend
+    - Forwards to backend with full message history
     - Optionally runs response filters
     - Returns OpenAI-style response
     """
     correlation_id = str(uuid.uuid4())
-    logger.info(f"[{correlation_id}] Request started", extra={"correlation_id": correlation_id})
+    start_time = time.time()
+    
+    logger.info(
+        f"[{correlation_id}] Request started",
+        extra={"correlation_id": correlation_id}
+    )
 
     # Validate: require at least one user message
     user_messages = [msg for msg in request.messages if msg.role == "user"]
     if not user_messages:
-        logger.warning(f"[{correlation_id}] No user messages found", extra={"correlation_id": correlation_id})
+        logger.warning(
+            f"[{correlation_id}] No user messages found",
+            extra={"correlation_id": correlation_id}
+        )
         return invalid_request_error(
             message="No user messages found",
             param="messages",
             code="empty_messages"
         )
 
-    # Combine user message content
-    prompt_text = " ".join(msg.content for msg in user_messages)
-    logger.info(f"[{correlation_id}] Original prompt length: {len(prompt_text)} chars", extra={"correlation_id": correlation_id})
+    # Log original message count
+    logger.info(
+        f"[{correlation_id}] Received {len(request.messages)} messages "
+        f"({len([m for m in request.messages if m.role == 'user'])} user, "
+        f"{len([m for m in request.messages if m.role == 'system'])} system, "
+        f"{len([m for m in request.messages if m.role == 'assistant'])} assistant)",
+        extra={"correlation_id": correlation_id}
+    )
 
-    # Run request-stage filters
+    # Run request-stage filters with message preservation
     try:
-        result = await pipeline.process_request(prompt_text, correlation_id)
+        result = await pipeline.process_request_messages(
+            request.messages, 
+            correlation_id
+        )
+        
+        filters_applied, action = _extract_filter_metadata(result)
+        
         if result.action == "reject":
-            logger.warning(f"[{correlation_id}] Request rejected: {result.reason}", extra={"correlation_id": correlation_id})
+            logger.warning(
+                f"[{correlation_id}] Request rejected: {result.reason}",
+                extra={"correlation_id": correlation_id}
+            )
             return policy_rejection_error(message=f"Policy rejection: {result.reason}")
 
-        transformed_text = result.text
-        logger.info(f"[{correlation_id}] Transformed prompt length: {len(transformed_text)} chars", extra={"correlation_id": correlation_id})
+        # Rebuild message list from filtered content
+        filtered_messages = filterable_to_messages(result.messages)
+        
+        logger.info(
+            f"[{correlation_id}] Request filtering complete: "
+            f"{'modified' if result.changed else 'unchanged'}, "
+            f"filters: {filters_applied}",
+            extra={"correlation_id": correlation_id}
+        )
         
         if config.logging.log_raw_prompt:
-            logger.info(f"[{correlation_id}] Raw prompt: {prompt_text}", extra={"correlation_id": correlation_id})
-        logger.info(f"[{correlation_id}] Transformed prompt: {transformed_text}", extra={"correlation_id": correlation_id})
+            # Only log if explicitly enabled (security-sensitive)
+            for msg in filtered_messages:
+                logger.debug(
+                    f"[{correlation_id}] Message [{msg.role}]: {msg.content[:100]}...",
+                    extra={"correlation_id": correlation_id}
+                )
 
     except Exception as e:
         if config.fail_open:
-            logger.warning(f"[{correlation_id}] Request pipeline error, failing open: {e}", extra={"correlation_id": correlation_id})
-            transformed_text = prompt_text
+            logger.warning(
+                f"[{correlation_id}] Request pipeline error, failing open: {e}",
+                extra={"correlation_id": correlation_id}
+            )
+            filtered_messages = request.messages  # Use original messages
+            filters_applied = []
+            action = "pass"
         else:
-            logger.error(f"[{correlation_id}] Request pipeline error, rejecting: {e}", extra={"correlation_id": correlation_id})
+            logger.error(
+                f"[{correlation_id}] Request pipeline error, rejecting: {e}",
+                extra={"correlation_id": correlation_id}
+            )
             return server_error(message="Internal processing error")
 
-    # Forward to backend
+    # Forward to backend with full message history
     try:
         backend_response = await backend.generate(
-            messages=[Message(role="user", content=transformed_text)],
+            messages=filtered_messages,
             model=request.model,
             options={
                 "max_tokens": request.max_tokens, 
@@ -178,24 +291,40 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
                 "stop": request.stop,
             }
         )
-        logger.info(f"[{correlation_id}] Backend response received", extra={"correlation_id": correlation_id})
+        logger.info(
+            f"[{correlation_id}] Backend response received",
+            extra={"correlation_id": correlation_id}
+        )
     except Exception as e:
-        logger.error(f"[{correlation_id}] Backend error: {e}", extra={"correlation_id": correlation_id})
+        logger.error(
+            f"[{correlation_id}] Backend error: {e}",
+            extra={"correlation_id": correlation_id}
+        )
         return service_unavailable_error(message=f"Backend error: {str(e)}")
 
     # Optionally run response-stage filters on the text returned by the backend
     raw_content = backend_response.get("content", "")
     resp_result = await pipeline.process_response(raw_content, correlation_id)
+    
     if resp_result.changed:
-        logger.info(f"[{correlation_id}] Response text modified by filters", extra={"correlation_id": correlation_id})
+        logger.info(
+            f"[{correlation_id}] Response text modified by filters",
+            extra={"correlation_id": correlation_id}
+        )
+        
     if resp_result.action == "reject":
         # We don't fail the HTTP request, but we log the rejection for observability
-        logger.warning(f"[{correlation_id}] Response rejected by filter: {resp_result.reason}", extra={"correlation_id": correlation_id})
+        logger.warning(
+            f"[{correlation_id}] Response rejected by filter: {resp_result.reason}",
+            extra={"correlation_id": correlation_id}
+        )
+        
     final_content = resp_result.text
 
     # Calculate token counts (approximate)
-    prompt_tokens = len(transformed_text.split())
-    completion_tokens = len(final_content.split())
+    # Use transformed content for prompt tokens
+    prompt_tokens = sum(_count_tokens(m.content) for m in filtered_messages)
+    completion_tokens = _count_tokens(final_content)
     total_tokens = prompt_tokens + completion_tokens
 
     # Build OpenAI-style response
@@ -223,5 +352,23 @@ async def chat_completions(request: ChatCompletionRequest, req: Request):
         usage=usage
     )
 
-    logger.info(f"[{correlation_id}] Request completed", extra={"correlation_id": correlation_id})
+    # Calculate latency
+    latency_ms = (time.time() - start_time) * 1000
+    
+    logger.info(
+        f"[{correlation_id}] Request completed in {latency_ms:.0f}ms",
+        extra={"correlation_id": correlation_id}
+    )
+    
+    # Emit demo output if in demo mode
+    if config.ui.demo_mode:
+        log_demo_summary(
+            correlation_id=correlation_id,
+            action=action,
+            filters=filters_applied,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            latency_ms=latency_ms
+        )
+    
     return response

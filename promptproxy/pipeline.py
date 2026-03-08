@@ -5,12 +5,56 @@ from dataclasses import dataclass
 
 from .config import Config
 from .registry import get_filter
+from .models import Message
+from .types import (
+    FilterContext, 
+    FilterResult, 
+    FilterableMessage, 
+    MessageFilterResult
+)
 import logging
-from .types import FilterContext, FilterResult
 
 logger = logging.getLogger(__name__)
 
+
+def messages_to_filterable(messages: List[Message]) -> List[FilterableMessage]:
+    """Convert OpenAI Message objects to FilterableMessage for filtering.
+    
+    This preserves the full message structure (role, content, name) while
+    preparing content for filtering.
+    
+    Policy: All message roles are preserved. Filters operate selectively
+    based on their own policies (default: user messages only).
+    """
+    return [
+        FilterableMessage(
+            role=msg.role,
+            content=msg.content,
+            name=msg.name
+        )
+        for msg in messages
+    ]
+
+
+def filterable_to_messages(filterable_messages: List[FilterableMessage]) -> List[Message]:
+    """Convert FilterableMessage objects back to Message for backend forwarding.
+    
+    This rebuilds the message list from filtered content, preserving the
+    original structure (roles, names) while using transformed content.
+    """
+    return [
+        Message(
+            role=fm.role,
+            content=fm.get_transformed_content(),
+            name=fm.name
+        )
+        for fm in filterable_messages
+    ]
+
+
 class Pipeline:
+    """Filter pipeline that processes requests while preserving message structure."""
+    
     def __init__(self, config: Config):
         self.config = config
         # initialize request and response filter lists separately
@@ -35,8 +79,102 @@ class Pipeline:
                         raise
         return initialized
 
+    async def process_request_messages(
+        self, 
+        messages: List[Message], 
+        correlation_id: str
+    ) -> MessageFilterResult:
+        """Process a list of messages while preserving structure.
+        
+        This is the primary entry point for request filtering. It:
+        1. Converts messages to filterable format
+        2. Runs each filter's apply_messages() method
+        3. Rebuilds the message list from transformed content
+        4. Returns the result with full message structure preserved
+        
+        Args:
+            messages: Original OpenAI message list
+            correlation_id: Request ID for logging/tracing
+            
+        Returns:
+            MessageFilterResult with transformed messages and metadata
+        """
+        context = FilterContext(correlation_id, self.config)
+        
+        # Convert to filterable format
+        filterable_messages = messages_to_filterable(messages)
+        logger.info(
+            f"[{correlation_id}] Starting request filter pipeline on {len(filterable_messages)} messages",
+            extra={"correlation_id": correlation_id}
+        )
+        
+        # Track all applied filters for metadata
+        all_applied_filters: List[str] = []
+        current_messages = filterable_messages
+        
+        for idx, filter_instance in enumerate(self.request_filters, start=1):
+            try:
+                result = await filter_instance.apply_messages(current_messages, context)
+                logger.info(
+                    f"[{correlation_id}] [request] Filter {idx}/{len(self.request_filters)} "
+                    f"{filter_instance.name}: {result.action} - {result.reason}",
+                    extra={"correlation_id": correlation_id}
+                )
+                
+                if result.action == "reject":
+                    # Convert back to original message format for error response
+                    return MessageFilterResult(
+                        messages=messages,  # Return original on reject
+                        changed=False,
+                        action="reject",
+                        reason=result.reason,
+                        metadata={"filter": filter_instance.name}
+                    )
+                
+                if result.changed:
+                    current_messages = result.messages
+                    all_applied_filters.append(filter_instance.name)
+                    
+            except Exception as e:
+                if self.config.fail_open:
+                    logger.warning(
+                        f"[{correlation_id}] [request] Filter {filter_instance.name} failed, failing open: {e}",
+                        extra={"correlation_id": correlation_id}
+                    )
+                else:
+                    logger.error(
+                        f"[{correlation_id}] [request] Filter {filter_instance.name} failed, rejecting: {e}",
+                        extra={"correlation_id": correlation_id}
+                    )
+                    return MessageFilterResult(
+                        messages=messages,
+                        changed=False,
+                        action="reject",
+                        reason=f"Filter error: {e}",
+                        metadata={"filter": filter_instance.name, "error": str(e)}
+                    )
+
+        logger.info(
+            f"[{correlation_id}] Request filtering complete",
+            extra={"correlation_id": correlation_id}
+        )
+        
+        return MessageFilterResult(
+            messages=current_messages,
+            changed=len(all_applied_filters) > 0,
+            action="modify" if all_applied_filters else "pass",
+            reason="Request filters completed",
+            metadata={"filters_applied": all_applied_filters}
+        )
+
     async def process_request(self, text: str, correlation_id: str) -> FilterResult:
         """Run the request filtering stage and return a FilterResult.
+
+        This is the legacy method for backward compatibility. It combines
+        all user message content into a single string for filtering.
+        
+        Note: For new code, prefer process_request_messages() to preserve
+        message structure.
 
         1. Filters are applied in order.
         2. Each receives the text returned by the previous filter.

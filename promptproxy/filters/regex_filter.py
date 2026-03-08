@@ -3,10 +3,16 @@
 import re
 from typing import List, Dict, Any
 
-from ..types import FilterContext, FilterResult
+from ..types import FilterContext, FilterResult, FilterableMessage, MessageFilterResult
 from .base import BaseFilter
 
+
 class RegexFilter(BaseFilter):
+    """Regex-based text replacement filter.
+    
+    This filter operates on user message content only, preserving
+    system and assistant messages for conversation context.
+    """
     def __init__(self, config):
         super().__init__(config)
         self.rules = []

@@ -1,9 +1,10 @@
 import pytest
 from unittest.mock import patch
 from promptproxy.config import Config
-from promptproxy.pipeline import Pipeline, FilterContext
-from promptproxy.filters.base import ResponseFilter
-from promptproxy.types import FilterResult
+from promptproxy.pipeline import Pipeline, messages_to_filterable, filterable_to_messages
+from promptproxy.filters.base import ResponseFilter, RequestFilter
+from promptproxy.types import FilterResult, Message, FilterableMessage
+from promptproxy.models import Message as OpenAIMessage
 
 @pytest.mark.asyncio
 async def test_pipeline_pass():
@@ -124,3 +125,152 @@ async def test_semantic_filter_missing_model_fail_closed():
         context = FilterContext("test-id", config)
         with pytest.raises(RuntimeError, match="spaCy model"):
             await pipeline.request_filters[0].apply("test text", context)
+
+
+@pytest.mark.asyncio
+async def test_messages_to_filterable_conversion():
+    """Test conversion from Message to FilterableMessage preserves structure."""
+    messages = [
+        OpenAIMessage(role="system", content="You are helpful."),
+        OpenAIMessage(role="user", content="Hello"),
+        OpenAIMessage(role="assistant", content="Hi there!"),
+        OpenAIMessage(role="user", content="How are you?"),
+    ]
+    
+    filterable = messages_to_filterable(messages)
+    
+    assert len(filterable) == 4
+    assert filterable[0].role == "system"
+    assert filterable[0].content == "You are helpful."
+    assert filterable[1].role == "user"
+    assert filterable[1].content == "Hello"
+    assert filterable[2].role == "assistant"
+    assert filterable[2].content == "Hi there!"
+    assert filterable[3].role == "user"
+    assert filterable[3].content == "How are you?"
+
+
+@pytest.mark.asyncio
+async def test_filterable_to_messages_conversion():
+    """Test conversion from FilterableMessage back to Message."""
+    filterable = [
+        FilterableMessage(role="system", content="You are helpful."),
+        FilterableMessage(role="user", content="Hello"),
+        FilterableMessage(role="assistant", content="Hi there!"),
+    ]
+    
+    # Simulate transformation
+    filterable[1].transformed = "HELLO"
+    filterable[1].changed = True
+    
+    messages = filterable_to_messages(filterable)
+    
+    assert len(messages) == 3
+    assert messages[0].role == "system"
+    assert messages[0].content == "You are helpful."
+    assert messages[1].role == "user"
+    assert messages[1].content == "HELLO"  # Transformed content
+    assert messages[2].role == "assistant"
+    assert messages[2].content == "Hi there!"
+
+
+@pytest.mark.asyncio
+async def test_process_request_messages_preserves_structure():
+    """Test that process_request_messages preserves message structure."""
+    from promptproxy.filters import register_filters
+    from promptproxy.registry import register_filter
+    
+    # Register a simple uppercase filter
+    class UppercaseFilter(RequestFilter):
+        async def apply(self, text, context):
+            return FilterResult(
+                text=text.upper(),
+                changed=True,
+                action="modify",
+                reason="uppercase",
+                metadata={}
+            )
+    
+    register_filter("uppercase", UppercaseFilter)
+    register_filters()
+    
+    config = Config(request_filters=[{"name": "uppercase", "enabled": True}])
+    pipeline = Pipeline(config)
+    
+    # Multi-message input
+    messages = [
+        OpenAIMessage(role="system", content="You are helpful."),
+        OpenAIMessage(role="user", content="hello"),
+        OpenAIMessage(role="assistant", content="Hi there!"),
+    ]
+    
+    result = await pipeline.process_request_messages(messages, "test-id")
+    
+    # Check that message structure is preserved
+    assert result.changed is True
+    assert len(result.messages) == 3
+    
+    # System message should be unchanged
+    assert result.messages[0].role == "system"
+    assert result.messages[0].content == "You are helpful."
+    
+    # User message should be transformed
+    assert result.messages[1].role == "user"
+    assert result.messages[1].content == "HELLO"
+    
+    # Assistant message should be unchanged (not filtered by default)
+    assert result.messages[2].role == "assistant"
+    assert result.messages[2].content == "Hi there!"
+
+
+@pytest.mark.asyncio
+async def test_process_request_messages_reject():
+    """Test that reject action in message mode returns original messages."""
+    from promptproxy.filters import register_filters
+    from promptproxy.registry import register_filter
+    
+    class RejectFilter(RequestFilter):
+        async def apply(self, text, context):
+            if "bad" in text.lower():
+                return FilterResult(
+                    text=text,
+                    changed=False,
+                    action="reject",
+                    reason="Bad content",
+                    metadata={}
+                )
+            return FilterResult(text=text, changed=False, action="pass", reason="ok", metadata={})
+        
+        async def apply_messages(self, messages, context):
+            from promptproxy.types import MessageFilterResult
+            for msg in messages:
+                if msg.role == "user" and "bad" in msg.content.lower():
+                    return MessageFilterResult(
+                        messages=messages,
+                        changed=False,
+                        action="reject",
+                        reason="Bad content found",
+                        metadata={"filter": "reject"}
+                    )
+            return MessageFilterResult(
+                messages=messages,
+                changed=False,
+                action="pass",
+                reason="ok",
+                metadata={}
+            )
+    
+    register_filter("reject", RejectFilter)
+    register_filters()
+    
+    config = Config(request_filters=[{"name": "reject", "enabled": True}])
+    pipeline = Pipeline(config)
+    
+    messages = [
+        OpenAIMessage(role="user", content="this is bad"),
+    ]
+    
+    result = await pipeline.process_request_messages(messages, "test-id")
+    
+    assert result.action == "reject"
+    assert result.reason == "Bad content found"
